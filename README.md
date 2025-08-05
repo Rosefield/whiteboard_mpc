@@ -1,11 +1,11 @@
 # Whiteboard MPC
 
-This library provides an implementation of multiple common (multiparty) protocols in MPC initially designed to implement the dishonest majority threshold MPC scheme of Rosefield, shelat, and Tyner ([RsT24](https://eprint.iacr.org/2024/316)).
+This library provides an implementation of multiple common (multiparty) protocols in MPC initially designed to implement the dishonest majority threshold MPC scheme of Rosefield, shelat, and Tyner ([RsT24](https://eprint.iacr.org/2024/316)) and forked from [thresh_mpc](https://github.com/rosefield/thresh_mpc).
 The goal of this project is to assist cryptographers in sketching out and developing novel cryptographic protocols by providing many of the tools (e.g. Functionalities) needed to do so.
 
 ## Installation 
 
-Compilation requires a Nightly rust toolchain (version >=1.75.0), as well as the EMP-tool and EMP-OT libraries, that themselves depend on OpenSSL.
+Compilation requires a Nightly rust toolchain, as well as the EMP-tool and EMP-OT libraries, that themselves depend on OpenSSL.
 
 EMP-tool can be installed with the following commands, see [https://github.com/emp-toolkit/emp-readme](https://github.com/emp-toolkit/emp-readme) for more information.
 ```
@@ -59,12 +59,18 @@ Currently the following functionalities are implemented by the library
 - `Fnet` with `AsyncNetMgr` 
 - `Fcom` with `FolkloreComPlayer` 
 - `Frand` with `FolkloreRandPlayer`
+- `Fzero` with `FolkloreRoZeroPlayer`
+- `Fzksigma` with `MaurerZkPlayer` that implements ZK proofs of sigma protocols over homomorphic relations of [Maurer15](https://crypto.ethz.ch/publications/files/Maurer15.pdf)
+- `Feot` with `ZzzrEotPlayer` that implements the endemic OT protocol of [ZZZR23](https://eprint.iacr.org/2022/1525.pdf)
+- `Fot` with `SoftspokenOtePlayer` that implements the OT extension protocol of [Roy22](https://eprint.iacr.org/2022/192.pdf)
 - `Fcote` with `KosCotePlayer` that builds upon the [KOS15](https://eprint.iacr.org/2015/546) correlated OT protocol implemented in the EMP-OT library to support per-message correlations
 - `Fmult` with `DklsMultPlayer` that implements the multiparty multiplication scheme of [DKLs19](https://eprint.iacr.org/2019/523)
+- `Fvole` with `Dkls23VolePlayer` that implements the [DKLs23](https://eprint.iacr.org/2023/765.pdf) VOLE protocol.
+- `Fecdsa` with `Dkls23EcdsaPlayer` that implements the [DKLs23](https://eprint.iacr.org/2023/765.pdf) threshold ECDSA protocol.
 - `Fmpc` with `WrkMpcPlayer` that utilizes the [WRK17](https://eprint.iacr.org/2017/189) scheme implemented by the EMP-agmpc library
 - `Fabit` with `WrkAbitPlayer` that utilizes the [WRK17](https://eprint.iacr.org/2017/189) scheme implemented by the EMP-agmpc library
 - `Ftabit` with `RstTabitPlayer`
 - `Fthresh` with `RstThreshPlayer` and `GenericThreshPlayer`
 
 ## Questions
-Please email rosefield.s (@) northeastern.edu
+Please email schuyler (@) rosefield.org
