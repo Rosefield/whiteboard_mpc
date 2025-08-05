@@ -1,0 +1,9 @@
+/target
+/dependencies/mpc_runner_*.cpp
+/dependencies/mpc_runner
+/dependencies/mpc_runner_*
+/dependencies/mpc_runner
+/tmp
+/logs
+
+*.svg

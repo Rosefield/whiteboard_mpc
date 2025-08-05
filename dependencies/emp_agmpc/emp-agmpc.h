@@ -1,0 +1,9 @@
+#ifndef EMP_AGMPC_H__
+#define EMP_AGMPC_H__
+#include "abitmp.h"
+#include "cmpc_config.h"
+#include "fpremp.h"
+#include "helper.h"
+#include "mpc.h"
+#include "netmp.h"
+#endif// EMP_AGMPC_H__
