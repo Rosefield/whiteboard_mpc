@@ -1,3 +1,5 @@
+//! This module defines Oblivious Transfer related functionalities
+
 use crate::{
     base_func::{SessionId, CheatOrUnexpectedError, UnexpectedError},
     field::{Ring, RandElement},
@@ -6,6 +8,14 @@ use crate::{
 };
 
 
+/// Trait for Oblivious Transfer (extension)
+///
+///     --------   
+///     |      | 
+/// m_* |  OT  | b, m_b
+/// <-- |      | -->  
+///     --------
+/// Where a sender learns two messages, and the receiver gets exactly one of them.
 pub trait AsyncOt {
     /// Runs the setup to create the base OTs and correlation
     async fn init(
@@ -29,7 +39,6 @@ pub trait AsyncOt {
         other: PartyId,
     ) -> Result<(Vector<bool, ELL>, Vector<T, ELL>), CheatOrUnexpectedError>;
 }
-
 
 /// Trait for the Correlated OT (extension) functionality
 ///

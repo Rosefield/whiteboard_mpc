@@ -222,6 +222,12 @@ macro_rules! impl_module {
             where $($constraint)*
         {
             const DEGREE:usize = $ext;
+
+            /*
+            fn as_vector(&self) -> Vector<$type2, {Self::DEGREE}> {
+                self.as_vector()
+            }
+            */
         }
     };
 }

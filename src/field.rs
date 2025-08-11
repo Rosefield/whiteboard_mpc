@@ -4,7 +4,10 @@ use std::{
     ops::{Neg, Add, AddAssign, Mul, MulAssign, Sub, SubAssign, BitXor, BitXorAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign},
 };
 
-use crate::field_macros::{impl_arith, impl_unary, impl_sum_prod, impl_module};
+use crate::{
+    field_macros::{impl_arith, impl_unary, impl_sum_prod, impl_module},
+    linalg::Vector,
+};
 
 use rand::Rng;
 
@@ -217,9 +220,19 @@ pub trait Field: Ring {
     fn inv(&self) -> Option<Self>;
 }
 
-pub trait Extension<R: Group> {
-    fn embed(el: &R) -> Self;
+pub trait Extension<G: Group> {
+    fn embed(el: &G) -> Self;
 }
+
+/*
+ * Choose not to implement to allow collections to implement their own extension if necessary.
+// Can always embed an element into its own group
+impl<G: Group> Extension<G> for G {
+    fn embed(el: &G) -> Self {
+        el.clone()
+    }
+}
+*/
 
 pub trait RingExtension<R: Ring>: Extension<R> + Ring {}
 
@@ -229,7 +242,21 @@ pub trait Module<R: Ring>: Group + Add<R, Output=Self> + AddAssign<R> + for<'a> 
     Sub<R, Output=Self> + SubAssign<R> + for<'a> SubAssign<&'a R> +
     Mul<R, Output=Self> + MulAssign<R> + for<'a> MulAssign<&'a R> {
 
+    #[type_const]
     const DEGREE: usize;
+
+    //fn as_vector(&self) -> Vector<R, {Self::DEGREE}>;
+}
+
+// Objects can always be considered a module for themselves.
+impl<R: Ring> Module<R> for R {
+    const DEGREE: usize = 1;
+
+    /*
+    fn as_vector(&self) -> Vector<R, {Self::DEGREE}> {
+        Vector::broadcast(self.clone())
+    }
+    */
 }
 
 pub trait VectorSpace<F: Field>: Module<F> {}
@@ -469,6 +496,10 @@ impl<T, const N: usize> From<[T; N]> for FWrap<[T; N]> {
 impl<T: Clone, const N: usize> FWrap<[T; N]> {
     pub fn broadcast(v: T) -> Self {
         Self(std::array::from_fn(|_| v.clone()))
+    }
+
+    pub fn as_vector(&self) -> Vector<T, N> {
+        self.0.clone().into()
     }
 }
 

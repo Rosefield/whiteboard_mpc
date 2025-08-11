@@ -161,6 +161,12 @@ impl<const N: usize> Rr2Ell<N>
     }
 }
 
+impl<const N: usize> From<Rr2Ell<N>> for Vector<FF2, N> {
+    fn from(e: Rr2Ell<N>) -> Self {
+        e.as_vector()
+    }
+}
+
 // \FF_2[X] \ <x^2 + x + 1>
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct FF4
@@ -379,6 +385,13 @@ impl<const N: usize> Rr4Ell<N>
             .for_each(|s| {
                 *s = ff4_mul(*s, o);
             });
+    }
+}
+
+
+impl<const N: usize> From<Rr4Ell<N>> for Vector<FF4, N> {
+    fn from(e: Rr4Ell<N>) -> Self {
+        e.as_vector()
     }
 }
 

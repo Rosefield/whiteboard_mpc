@@ -1,3 +1,5 @@
+//! This module implements the Softspoken OT extension protocol of Roy22 <https://eprint.iacr.org/2022/192>
+
 use crate::{
     base_func::{
         BaseFunc, CheatDetectedError, CheatOrUnexpectedError, FuncId, SessionId, UnexpectedError,
@@ -65,23 +67,30 @@ impl<FOT: AsyncEot, FN: AsyncNet> AsyncOt for SoftspokenOtePlayer<FOT, FN> {
         sid: SessionId,
         other: PartyId,
     ) -> Result<(Vector<T, ELL>, Vector<T, ELL>), CheatOrUnexpectedError> {
-        self.ot_extension_send(sid, other).await
+        unimplemented!() //self.ot_extension_send(sid, other).await
     }
 }
 
 impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
-    async fn nm1_ot_send(
+    async fn nm1_ot_send<const K: usize, const NC: usize, const EK: usize>(
         &self,
         sid: SessionId,
         other: PartyId,
-        num: usize,
-    ) -> Result<Vec<[Rr2Ell<128>; 4]>, CheatOrUnexpectedError> {
-        const K: usize = 2;
-        const _NC: usize = 2;
+    ) -> Result<Vec<[Rr2Ell<128>; EK]>, CheatOrUnexpectedError> {
+        assert_eq!(2usize.pow(K as u32), EK);
 
         let otsid = sid.derive_ssid(FuncId::Fot);
 
-        let ms = self.ot.send::<Rr2Ell<128>>(otsid, other, num).await?; // 128 = K*NC
+        let ms = self.ot.send::<Rr2Ell<128>>(otsid, other, K * NC).await?;
+
+        if K == 1 && EK == 2 {
+            // SAFETY: we check that EK == 2 already, and ot.send returns a Vec<[_; 2]>. The
+            // transmute just makes the type system happy.
+            let ms = unsafe { std::mem::transmute(ms) };
+            return Ok(ms);
+        }
+
+        assert_eq!(K, 2, "don't fully handle K > 2 right now");
 
         // probably should avoid double-allocating on the messages to send
         let (nm1_ots, msgs): (Vec<_>, Vec<_>) = ms
@@ -89,7 +98,7 @@ impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
             .map(|c| {
                 let (leaves, trace, s, t) = internal::all_but_one_ot_send(c);
                 (
-                    <[_; 4]>::try_from(leaves).unwrap(),
+                    <[_; EK]>::try_from(leaves).unwrap(),
                     FWrap((trace[0].clone(), s, t)),
                 )
             })
@@ -118,18 +127,32 @@ impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
         Ok(nm1_ots)
     }
 
-    async fn nm1_ot_recv(
+    async fn nm1_ot_recv<const K: usize, const NC: usize, const EKM1: usize>(
         &self,
         sid: SessionId,
         other: PartyId,
         bits: &[bool],
-    ) -> Result<Vec<(usize, [Rr2Ell<128>; 3])>, CheatOrUnexpectedError> {
-        const K: usize = 2;
-        const NC: usize = 64;
+    ) -> Result<Vec<(usize, [Rr2Ell<128>; EKM1])>, CheatOrUnexpectedError> {
+        assert_eq!(2usize.pow(K as u32) - 1, EKM1);
+        assert_eq!(bits.len(), K * NC);
 
         let otsid = sid.derive_ssid(FuncId::Fot);
 
         let ms = self.ot.recv::<Rr2Ell<128>>(otsid, other, bits).await?;
+
+        if K == 1 && EKM1 == 1 {
+            let selections: Vec<(usize, [Rr2Ell<128>; 1])> = ms
+                .into_iter()
+                .zip(bits.iter())
+                .map(|(m, &b)| (1 - (b as usize), [m]))
+                .collect();
+
+            // Already check that EKM1 == 1, transmute to satisfy the type system
+            let selections = unsafe { std::mem::transmute(selections) };
+            return Ok(selections);
+        }
+
+        assert_eq!(K, 2, "don't fully handle K > 2 right now");
 
         type AB1Recv = FWrap<([Rr2Ell<128>; 2], [u8; 32], [u8; 32])>;
 
@@ -161,7 +184,7 @@ impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
                     return Err(self.cheat(sid, Some(other), "invalid pprf proof".to_string()));
                 }
 
-                let prfs: [Rr2Ell<128>; 3] = prfs.try_into().unwrap();
+                let prfs: [Rr2Ell<128>; EKM1] = prfs.try_into().unwrap();
 
                 Ok((idx, prfs))
             })
@@ -170,87 +193,126 @@ impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
         Ok(nm1_ots)
     }
 
-    async fn vole_send<const ELL: usize>(
+    async fn vole_send<
+        FP: Ring,
+        FQ: Ring,
+        RP,
+        RQ,
+        const ELL: usize,
+        const K: usize,
+        const NC: usize,
+        const EK: usize,
+    >(
         &self,
         sid: SessionId,
         other: PartyId,
-    ) -> Result<(Matrix<FF2, ELL, 64>, Matrix<FF4, ELL, 64>), CheatOrUnexpectedError> {
-        const _K: usize = 2;
-        const NC: usize = 64;
+    ) -> Result<(Matrix<FP, ELL, NC>, Matrix<FQ, ELL, NC>), CheatOrUnexpectedError>
+    where
+        RP: Ring + Module<FP> + RandElement + Into<Vector<FP, ELL>>,
+        RQ: Ring + RingExtension<RP> + Module<FQ> + RandElement + Into<Vector<FQ, ELL>>,
+    {
+        assert_eq!(2usize.pow(K as u32), EK);
 
-        let nm1_ots = self.nm1_ot_send(sid, other, 128).await?;
+        let nm1_ots = self.nm1_ot_send::<K, NC, EK>(sid, other).await?;
 
         // receive U', V
         // probably need to transpose U' since right now it is in the form of \FF_p^{nc \times \ell}
         // paper mentions calculating this using Eklundh's algorithm
         let voles: (Vec<_>, Vec<_>) = nm1_ots
             .into_iter()
-            .map(|prfs| internal::small_vole_send::<_, Rr2Ell<ELL>, Rr4Ell<ELL>>(&prfs))
+            .map(|prfs| internal::small_vole_send::<_, FQ, RP, RQ, EK>(&prfs))
             .unzip();
-        let u_transpose_vec: Vec<_> = voles.0.into_iter().map(|row| row.as_vector()).collect();
-        let u_transpose: Matrix<FF2, NC, ELL> = u_transpose_vec.try_into().unwrap();
+        let u_transpose_vec: Vec<Vector<FP, ELL>> =
+            voles.0.into_iter().map(|row| row.into()).collect();
+        let u_transpose: Matrix<FP, NC, ELL> = u_transpose_vec.try_into().unwrap();
         let uprime = u_transpose.transpose();
 
-        let v_transpose_vec: Vec<_> = voles.1.into_iter().map(|row| row.as_vector()).collect();
-        let v_transpose: Matrix<FF4, NC, ELL> = v_transpose_vec.try_into().unwrap();
-        let v: Matrix<FF4, ELL, NC> = v_transpose.transpose();
+        let v_transpose_vec: Vec<_> = voles.1.into_iter().map(|row| row.into()).collect();
+        let v_transpose: Matrix<FQ, NC, ELL> = v_transpose_vec.try_into().unwrap();
+        let v: Matrix<FQ, ELL, NC> = v_transpose.transpose();
 
         Ok((uprime, v))
     }
 
-    async fn vole_recv<const ELL: usize>(
+    async fn vole_recv<
+        FP: Ring,
+        FQ: Ring,
+        RP,
+        RQ,
+        const ELL: usize,
+        const K: usize,
+        const NC: usize,
+        const EKM1: usize,
+    >(
         &self,
         sid: SessionId,
         other: PartyId,
-    ) -> Result<(Vector<FF4, 64>, Matrix<FF4, ELL, 64>), CheatOrUnexpectedError> {
-        const K: usize = 2;
-        const NC: usize = 64;
+    ) -> Result<(Vector<FQ, NC>, Matrix<FQ, ELL, NC>), CheatOrUnexpectedError>
+    where
+        RP: Ring + Module<FP> + RandElement + Into<Vector<FP, ELL>>,
+        RQ: Ring + RingExtension<RP> + Module<FQ> + RandElement + Into<Vector<FQ, ELL>>,
+    {
+        assert_eq!(2usize.pow(K as u32) - 1, EKM1);
 
         let bits = {
-            let mut bits = [false; K * NC];
+            let mut bits = vec![false; K * NC];
             let mut rng = rand::thread_rng();
             rng.fill(bits.as_mut_slice());
             bits
         };
 
-        let nm1_ots = self.nm1_ot_recv(sid, other, &bits).await?;
+        let nm1_ots = self.nm1_ot_recv::<K, NC, EKM1>(sid, other, &bits).await?;
 
         // receive \Delta, W
         // probably need to transpose U' since right now it is in the form of \FF_p^{nc \times \ell}
         // paper mentions calculating this using Eklundh's algorithm
         let (delta, wprime): (Vec<_>, Vec<_>) = nm1_ots
             .into_iter()
-            .map(|(idx, prfs)| internal::small_vole_recv::<_, Rr2Ell<ELL>, Rr4Ell<ELL>>(idx, &prfs))
+            .map(|(idx, prfs)| internal::small_vole_recv::<_, FQ, RP, RQ, EKM1>(idx, &prfs))
             .unzip();
 
-        let delta: Vector<FF4, NC> = delta.try_into().unwrap();
-        let wprime_t_v: Vec<_> = wprime.into_iter().map(|r| r.as_vector()).collect();
-        let wprime_t: Matrix<FF4, NC, ELL> = wprime_t_v.try_into().unwrap();
+        let delta: Vector<FQ, NC> = delta.try_into().unwrap();
+        let wprime_t_v: Vec<_> = wprime.into_iter().map(|r| r.into()).collect();
+        let wprime_t: Matrix<FQ, NC, ELL> = wprime_t_v.try_into().unwrap();
         let wprime = wprime_t.transpose();
 
         Ok((delta, wprime))
     }
 
-    async fn rep_subspace_vole_send<const ELL: usize>(
+    async fn rep_subspace_vole_send<
+        FP: Ring,
+        FQ: Ring + Extension<FP>,
+        RP,
+        RQ,
+        const ELL: usize,
+        const K: usize,
+        const NC: usize,
+        const EK: usize,
+    >(
         &self,
         sid: SessionId,
         other: PartyId,
-    ) -> Result<(Matrix<FF2, ELL, 1>, Matrix<FF4, ELL, 64>), CheatOrUnexpectedError> {
+    ) -> Result<(Matrix<FP, ELL, 1>, Matrix<FQ, ELL, NC>), CheatOrUnexpectedError>
+    where
+        RP: Ring + Module<FP> + RandElement + Into<Vector<FP, ELL>>,
+        RQ: Ring + RingExtension<RP> + Module<FQ> + RandElement + Into<Vector<FQ, ELL>>,
+        [(); NC - 1]:,
+    {
         // k * n_c instances of 1-of-2 (interpretted as n-1 ot)
         // gives n_c instances of (2^k-1 - of - 2^k) ot
         // gives (p,q)-subspace VOLE of length \ell
         // gives (p,q)-subspace VOLE of length \ell where elements lie in some
         // linear code C [n_c, k_c, d_c] which is a k_c-dimensional subspace of F_p^{n_c}
         // gives \ell instances of 1-of-(p^{k_c}) OT (e.g. OT extension)
-        const _K: usize = 2;
-        const NC: usize = 64;
         const KC: usize = 1;
 
-        let (uprime, v) = self.vole_send(sid, other).await?;
+        let (uprime, v) = self
+            .vole_send::<FP, FQ, RP, RQ, ELL, K, NC, EK>(sid, other)
+            .await?;
 
         // TODO: select the right code
         // TODO: since we don't use a generic code, we can specialize this multiplication
-        let tcinv: Matrix<FF2, NC, NC> = internal::rep_code_basis_inv();
+        let tcinv: Matrix<FP, NC, NC> = internal::rep_code_basis_inv();
 
         let t = uprime.mm(&tcinv);
         // [U C] = t
@@ -267,14 +329,14 @@ impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
         // TODO: What is this supposed to be?
         const M: usize = 100;
 
-        buf.resize(Matrix::<FF4, M, ELL>::BYTES, 0);
+        buf.resize(Matrix::<FQ, M, ELL>::BYTES, 0);
         let _ = self
             .net
             .recv_from_local(other, FuncId::Fot, sid, &mut buf[..])
             .await
             .with_context(|| self.err(sid, "failed to received R matrix"))?;
 
-        let r: Matrix<FF4, M, ELL> = Matrix::from_bytes(&buf[..]);
+        let r: Matrix<FQ, M, ELL> = Matrix::from_bytes(&buf[..]);
 
         let u4 = Matrix::embed(&u);
         let ut = r.mm(&u4);
@@ -295,35 +357,52 @@ impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
         Ok((u, v))
     }
 
-    async fn rep_subspace_vole_recv<const ELL: usize>(
+    async fn rep_subspace_vole_recv<
+        FP: Ring + RandElement,
+        FQ: Ring + Extension<FP> + RandElement,
+        RP,
+        RQ,
+        const ELL: usize,
+        const K: usize,
+        const NC: usize,
+        const EKM1: usize,
+    >(
         &self,
         sid: SessionId,
         other: PartyId,
-    ) -> Result<(Vector<FF4, 64>, Matrix<FF4, ELL, 64>), CheatOrUnexpectedError> {
-        const _K: usize = 2;
-        const NC: usize = 64;
+    ) -> Result<(Vector<FQ, NC>, Matrix<FQ, ELL, NC>), CheatOrUnexpectedError>
+    where
+        RP: Ring + Module<FP> + RandElement + Into<Vector<FP, ELL>>,
+        RQ: Ring + RingExtension<RP> + Module<FQ> + RandElement + Into<Vector<FQ, ELL>>,
+        [(); NC - 1]:,
+    {
         const KC: usize = 1;
 
-        let (delta, wprime) = self.vole_recv(sid, other).await?;
+        let (delta, wprime) = self
+            .vole_recv::<FP, FQ, RP, RQ, ELL, K, NC, EKM1>(sid, other)
+            .await?;
 
-        let mut buf = vec![0u8; Matrix::<FF2, ELL, { NC - KC }>::BYTES];
+        let mut buf = vec![0u8; Matrix::<FP, ELL, { NC - KC }>::BYTES];
         let _ = self
             .net
             .recv_from_local(other, FuncId::Fot, sid, &mut buf[..])
             .await
             .with_context(|| self.err(sid, "failed to recv code correction message"))?;
 
-        let c = Matrix::<FF2, ELL, 63>::from_bytes(&buf);
-        let mut ca = Matrix::<FF2, ELL, NC>::zero();
+        let c = Matrix::<FP, ELL, { NC - KC }>::from_bytes(&buf);
+        let mut ca = Matrix::<FP, ELL, NC>::zero();
         // TODO: Slice/view set without allocation
         ca.rows_mut().zip(c.rows()).for_each(|(l, r)| {
-            let v: Vector<FF2, 1> = Vector::zero();
-            let v: Vector<FF2, NC> = v.concat(r);
-            *l = v;
+            l.i.0[1..]
+                .iter_mut()
+                .zip(r.clone().into_iter())
+                .for_each(|(l, r)| {
+                    *l = r;
+                });
         });
 
-        // TODO: different/generic codes
-        let tc: Matrix<FF4, NC, NC> = internal::rep_code_basis();
+        // TODO: specialize instead of doing matrix operations
+        let tc: Matrix<FQ, NC, NC> = internal::rep_code_basis();
         let diag = Matrix::diag(&delta);
         let tcd = tc.mm(&diag);
 
@@ -337,10 +416,10 @@ impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
         // TODO: send seed instead of full matrix
         let r = {
             let mut rng = rand::thread_rng();
-            Matrix::<FF4, M, ELL>::rand(&mut rng)
+            Matrix::<FQ, M, ELL>::rand(&mut rng)
         };
 
-        buf.resize(Matrix::<FF4, M, ELL>::BYTES, 0);
+        buf.resize(Matrix::<FQ, M, ELL>::BYTES, 0);
         r.to_bytes(&mut buf);
         let _ = self
             .net
@@ -348,8 +427,8 @@ impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
             .await
             .with_context(|| self.err(sid, "failed to send universal hash"))?;
 
-        type CheckMsg = FWrap<(Matrix<FF4, M, KC>, Matrix<FF4, M, NC>)>;
-        buf.resize(CheckMsg::BYTES, 0);
+        type CheckMsg<FQ: Ring, const NC: usize> = FWrap<(Matrix<FQ, M, KC>, Matrix<FQ, M, NC>)>;
+        buf.resize(CheckMsg::<FQ, NC>::BYTES, 0);
         let _ = self
             .net
             .recv_from_local(other, FuncId::Fot, sid, &mut buf[..])
@@ -358,10 +437,10 @@ impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
 
         // paper on eprint says that vt should be M x K_c, but I am fairly certain this is a typo
         // for N_c
-        let FWrap((ut, vt)) = CheckMsg::from_bytes(&buf);
+        let FWrap((ut, vt)) = CheckMsg::<FQ, NC>::from_bytes(&buf);
 
         // in this case G_C * Diag(Delta) = Delta
-        let code_gen: Matrix<FF4, KC, NC> = internal::rep_code_generator();
+        let code_gen: Matrix<FQ, KC, NC> = internal::rep_code_generator();
         let testv = r.mm(&w) - ut.mm(&code_gen.mm(&diag));
         if testv != vt {
             return Err(self
@@ -380,10 +459,12 @@ impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
     ) -> Result<(Vector<R, ELL>, Vector<R, ELL>), CheatOrUnexpectedError> {
         // ot extension sender is the vole receiver
 
-        let (delta, w) = self.rep_subspace_vole_recv::<ELL>(sid, other).await?;
+        let (delta, w) = self
+            .rep_subspace_vole_recv::<FF2, FF4, Rr2Ell<ELL>, Rr4Ell<ELL>, ELL, 2, 64, 3>(sid, other)
+            .await?;
 
         let encode = |_i: usize| {
-            // encode i into a random row
+            // TODO: encode i into a random row
             Vector::<FF4, 64>::one()
         };
 
@@ -394,7 +475,7 @@ impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
                 let ri = encode(i);
                 let y0 = ri + w;
                 let y1 = y0.clone() - &delta;
-                // TODO: proper TCR hash here
+                // TODO: TCR hash here
                 let ro = RO::new()
                     .add_context("Fvole.ot_extension")
                     .add_context(i.to_le_bytes());
@@ -418,7 +499,9 @@ impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
     ) -> Result<(Vector<bool, ELL>, Vector<R, ELL>), CheatOrUnexpectedError> {
         // ot extension sender is the vole receiver
 
-        let (u, v) = self.rep_subspace_vole_send::<ELL>(sid, other).await?;
+        let (u, v) = self
+            .rep_subspace_vole_send::<FF2, FF4, Rr2Ell<ELL>, Rr4Ell<ELL>, ELL, 2, 64, 4>(sid, other)
+            .await?;
         let bs = std::array::from_fn(|i| !u.get_row(i).is_zero());
 
         // TODO: get from sender
@@ -441,6 +524,43 @@ impl<FOT: AsyncEot, FN: AsyncNet> SoftspokenOtePlayer<FOT, FN> {
         });
 
         Ok((bs.into(), ms.into()))
+    }
+
+    async fn rand_cot_extension_send<const ELL: usize>(
+        &self,
+        sid: SessionId,
+        other: PartyId,
+    ) -> Result<(Vector<FF2, 128>, Matrix<FF2, ELL, 128>), CheatOrUnexpectedError> {
+        // ot extension sender is the vole receiver
+
+        let (delta, w) = self
+            .rep_subspace_vole_recv::<FF2, FF2, Rr2Ell<ELL>, Rr2Ell<ELL>, ELL, 1, 128, 1>(
+                sid, other,
+            )
+            .await?;
+
+        // above correlation is leaky, can compress to have non-leaky correlations
+        Ok((delta, w))
+    }
+
+    async fn rand_cot_extension_recv<R: RandElement, const ELL: usize>(
+        &self,
+        sid: SessionId,
+        other: PartyId,
+    ) -> Result<(Vector<FF2, ELL>, Matrix<FF2, ELL, 128>), CheatOrUnexpectedError> {
+        // ot extension sender is the vole receiver
+
+        let (u, v) = self
+            .rep_subspace_vole_send::<FF2, FF2, Rr2Ell<ELL>, Rr2Ell<ELL>, ELL, 1, 128, 2>(
+                sid, other,
+            )
+            .await?;
+
+        // above correlation is leaky, can compress to have non-leaky correlations
+
+        let u = u.transpose().get_row(0).clone();
+
+        Ok((u, v))
     }
 }
 
@@ -509,49 +629,54 @@ pub mod internal {
         (delta, leaves, sp)
     }
 
-    /// F_{VOLE}^{p,q,\FF_p, \ell}
-    pub fn small_vole_send<T: AsRef<[u8]>, R2, R4>(prfs: &[T; 4]) -> (R2, R4)
+    /// `F_{VOLE}^{p,q,\FF_p, \ell}`
+    pub fn small_vole_send<T: AsRef<[u8]>, FQ: Ring, RP, RQ, const N: usize>(
+        prfs: &[T; N],
+    ) -> (RP, RQ)
     where
-        R2: Ring + RandElement,
-        R4: Ring + RingExtension<R2> + Module<FF4> + RandElement,
+        RP: Ring + RandElement,
+        RQ: Ring + RingExtension<RP> + Module<FQ> + RandElement,
     {
         // need prg: \bit^\secparam \rightarrow \FF_p^\ell
 
         let prg = Prg::new();
 
-        let mut u = R2::zero();
-        let mut v = R4::zero();
+        let mut u = RP::zero();
+        let mut v = RQ::zero();
 
         // TODO: the paper notes a more computationally efficient way to calculate v
         // but I will ignore that for now.
         prfs.iter().enumerate().for_each(|(x, p)| {
-            let rx: R2 = prg.generate(p);
+            let rx: RP = prg.generate(p);
             u += &rx;
-            v -= R4::embed(&rx) * FF4::new(x as u8);
+            v -= RQ::embed(&rx) * FQ::from(x as u64);
         });
 
         (u, v)
     }
 
-    pub fn small_vole_recv<T: AsRef<[u8]>, R2, R4>(missing: usize, prfs: &[T; 3]) -> (FF4, R4)
+    pub fn small_vole_recv<T: AsRef<[u8]>, FQ: Ring, RP, RQ, const N: usize>(
+        missing: usize,
+        prfs: &[T; N],
+    ) -> (FQ, RQ)
     where
-        R2: Ring + RandElement,
-        R4: Ring + RingExtension<R2> + Module<FF4> + RandElement,
+        RP: Ring + RandElement,
+        RQ: Ring + RingExtension<RP> + Module<FQ> + RandElement,
     {
         let prg = Prg::new();
-        let delta = FF4::new(missing as u8);
+        let delta = FQ::from(missing as u64);
         let w = prfs
             .iter()
             .enumerate()
             .map(|(i, p)| {
                 let x = if i < missing {
-                    FF4::new(i as u8)
+                    FQ::from(i as u64)
                 } else {
-                    FF4::new((i + 1) as u8)
+                    FQ::from((i + 1) as u64)
                 };
-                let dx = delta - x;
-                let rx: R2 = prg.generate(p);
-                R4::embed(&rx) * dx
+                let dx = delta.clone() - x;
+                let rx: RP = prg.generate(p);
+                RQ::embed(&rx) * dx
             })
             .sum();
         (delta, w)
@@ -574,12 +699,14 @@ pub mod tests {
         let mut rng = rand::thread_rng();
         let prfs: [Rr2Ell<128>; 4] = FWrap::rand(&mut rng).0;
 
-        let (u, v): (Rr2Ell<1024>, Rr4Ell<1024>) = internal::small_vole_send(&prfs);
+        let (u, v): (Rr2Ell<1024>, Rr4Ell<1024>) =
+            internal::small_vole_send::<_, FF4, _, _, 4>(&prfs);
 
         let missing = 2usize;
         let ab1prf = [prfs[0].clone(), prfs[1].clone(), prfs[3].clone()];
 
-        let (d, w): (_, Rr4Ell<1024>) = internal::small_vole_recv(missing, &ab1prf);
+        let (d, w): (_, Rr4Ell<1024>) =
+            internal::small_vole_recv::<_, FF4, _, _, 3>(missing, &ab1prf);
 
         assert_eq!(w - v, Rr4Ell::embed(&u) * d);
     }
@@ -614,7 +741,7 @@ pub mod tests {
             let ot = ots[0].clone();
             async move {
                 let _ = ot.init(sid, 2, false).await?;
-                ot.nm1_ot_send(sid, 2, 128).await
+                ot.nm1_ot_send::<2, 64, 4>(sid, 2).await
             }
         });
 
@@ -623,7 +750,7 @@ pub mod tests {
             async move {
                 let _ = ot.init(sid, 1, true).await?;
                 let bits = [false; 128];
-                ot.nm1_ot_recv(sid, 1, &bits).await
+                ot.nm1_ot_recv::<2, 64, 3>(sid, 1, &bits).await
             }
         });
 
